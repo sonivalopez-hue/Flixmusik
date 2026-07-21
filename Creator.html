@@ -1,0 +1,581 @@
+<html><head>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FLIXMUSIK CREATOR v11 ULTIMATE - 100% Works</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,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">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>*, ::before, ::after{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgb(59 130 246 / 0.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/* ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com */*,::after,::before{box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb}::after,::before{--tw-content:''}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0;padding:0}legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.fixed{position:fixed}.sticky{position:sticky}.inset-0{inset:0px}.bottom-6{bottom:1.5rem}.left-1\/2{left:50%}.top-0{top:0px}.z-40{z-index:40}.z-50{z-index:50}.z-\[100\]{z-index:100}.mx-auto{margin-left:auto;margin-right:auto}.mb-1{margin-bottom:0.25rem}.mb-2{margin-bottom:0.5rem}.mb-3{margin-bottom:0.75rem}.mb-4{margin-bottom:1rem}.mb-6{margin-bottom:1.5rem}.ml-2{margin-left:0.5rem}.mt-1{margin-top:0.25rem}.mt-2{margin-top:0.5rem}.mt-3{margin-top:0.75rem}.mt-4{margin-top:1rem}.flex{display:flex}.grid{display:grid}.hidden{display:none}.h-12{height:3rem}.h-16{height:4rem}.h-24{height:6rem}.h-48{height:12rem}.h-7{height:1.75rem}.h-fit{height:-moz-fit-content;height:fit-content}.max-h-40{max-height:10rem}.max-h-\[400px\]{max-height:400px}.max-h-\[800px\]{max-height:800px}.min-h-screen{min-height:100vh}.w-1\/2{width:50%}.w-12{width:3rem}.w-7{width:1.75rem}.w-fit{width:-moz-fit-content;width:fit-content}.w-full{width:100%}.max-w-2xl{max-width:42rem}.max-w-7xl{max-width:80rem}.max-w-\[90\%\]{max-width:90%}.max-w-sm{max-width:24rem}.flex-1{flex:1 1 0%}.-translate-x-1\/2{--tw-translate-x:-50%;transform:translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}.grid-cols-3{grid-template-columns:repeat(3, minmax(0, 1fr))}.flex-wrap{flex-wrap:wrap}.items-center{align-items:center}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-2{gap:0.5rem}.gap-6{gap:1.5rem}.space-y-1 > :not([hidden]) ~ :not([hidden]){--tw-space-y-reverse:0;margin-top:calc(0.25rem * calc(1 - var(--tw-space-y-reverse)));margin-bottom:calc(0.25rem * var(--tw-space-y-reverse))}.space-y-2 > :not([hidden]) ~ :not([hidden]){--tw-space-y-reverse:0;margin-top:calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));margin-bottom:calc(0.5rem * var(--tw-space-y-reverse))}.space-y-3 > :not([hidden]) ~ :not([hidden]){--tw-space-y-reverse:0;margin-top:calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));margin-bottom:calc(0.75rem * var(--tw-space-y-reverse))}.space-y-4 > :not([hidden]) ~ :not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1rem * calc(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem * var(--tw-space-y-reverse))}.overflow-auto{overflow:auto}.rounded{border-radius:0.25rem}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}.rounded-lg{border-radius:0.5rem}.rounded-xl{border-radius:0.75rem}.border{border-width:1px}.border-2{border-width:2px}.border-b{border-bottom-width:1px}.border-blue-500\/20{border-color:rgb(59 130 246 / 0.2)}.border-green-500{--tw-border-opacity:1;border-color:rgb(34 197 94 / var(--tw-border-opacity, 1))}.border-green-500\/20{border-color:rgb(34 197 94 / 0.2)}.border-green-500\/30{border-color:rgb(34 197 94 / 0.3)}.border-white\/10{border-color:rgb(255 255 255 / 0.1)}.border-white\/5{border-color:rgb(255 255 255 / 0.05)}.bg-\[\#080a12\]{--tw-bg-opacity:1;background-color:rgb(8 10 18 / var(--tw-bg-opacity, 1))}.bg-\[\#0f121e\]{--tw-bg-opacity:1;background-color:rgb(15 18 30 / var(--tw-bg-opacity, 1))}.bg-\[\#12131f\]{--tw-bg-opacity:1;background-color:rgb(18 19 31 / var(--tw-bg-opacity, 1))}.bg-\[\#151821\]{--tw-bg-opacity:1;background-color:rgb(21 24 33 / var(--tw-bg-opacity, 1))}.bg-\[\#1DB954\]{--tw-bg-opacity:1;background-color:rgb(29 185 84 / var(--tw-bg-opacity, 1))}.bg-\[\#229ED9\]{--tw-bg-opacity:1;background-color:rgb(34 158 217 / var(--tw-bg-opacity, 1))}.bg-black{--tw-bg-opacity:1;background-color:rgb(0 0 0 / var(--tw-bg-opacity, 1))}.bg-black\/40{background-color:rgb(0 0 0 / 0.4)}.bg-black\/50{background-color:rgb(0 0 0 / 0.5)}.bg-blue-500\/10{background-color:rgb(59 130 246 / 0.1)}.bg-green-500\/10{background-color:rgb(34 197 94 / 0.1)}.bg-green-500\/20{background-color:rgb(34 197 94 / 0.2)}.bg-green-600{--tw-bg-opacity:1;background-color:rgb(22 163 74 / var(--tw-bg-opacity, 1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255 / var(--tw-bg-opacity, 1))}.bg-white\/10{background-color:rgb(255 255 255 / 0.1)}.object-cover{object-fit:cover}.p-1{padding:0.25rem}.p-2{padding:0.5rem}.p-3{padding:0.75rem}.p-4{padding:1rem}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.px-2{padding-left:0.5rem;padding-right:0.5rem}.px-3{padding-left:0.75rem;padding-right:0.75rem}.px-4{padding-left:1rem;padding-right:1rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.px-6{padding-left:1.5rem;padding-right:1.5rem}.py-0\.5{padding-top:0.125rem;padding-bottom:0.125rem}.py-1{padding-top:0.25rem;padding-bottom:0.25rem}.py-2{padding-top:0.5rem;padding-bottom:0.5rem}.py-3{padding-top:0.75rem;padding-bottom:0.75rem}.text-center{text-align:center}.text-\[10px\]{font-size:10px}.text-\[11px\]{font-size:11px}.text-\[9px\]{font-size:9px}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-sm{font-size:0.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:0.75rem;line-height:1rem}.font-black{font-weight:900}.font-bold{font-weight:700}.text-black{--tw-text-opacity:1;color:rgb(0 0 0 / var(--tw-text-opacity, 1))}.text-green-400{--tw-text-opacity:1;color:rgb(74 222 128 / var(--tw-text-opacity, 1))}.text-red-400{--tw-text-opacity:1;color:rgb(248 113 113 / var(--tw-text-opacity, 1))}.text-white\/30{color:rgb(255 255 255 / 0.3)}.text-white\/40{color:rgb(255 255 255 / 0.4)}.text-white\/50{color:rgb(255 255 255 / 0.5)}.text-white\/60{color:rgb(255 255 255 / 0.6)}@media (min-width: 1024px){.lg\:col-span-1{grid-column:span 1 / span 1}.lg\:col-span-2{grid-column:span 2 / span 2}.lg\:grid-cols-3{grid-template-columns:repeat(3, minmax(0, 1fr))}}</style></head>
+<body style="background:#080a12;color:white" class="min-h-screen">
+<div id="pinLock" class="fixed inset-0 bg-[#080a12] z-[100] flex items-center justify-center p-4">
+<div class="bg-[#151821] rounded-2xl p-6 w-full max-w-sm border border-white/10 text-center">
+<div class="flex justify-center mb-3"><img src="data:image/png;base64,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" class="w-12 h-12 rounded-xl"></div>
+<h2 class="font-black text-xl mb-2"><span style="color:#1DB954">FLIXMUSIK</span> v11 ULTIMATE</h2>
+<p class="text-xs text-white/60 mb-4">100% Works - Cover Base64 + Audio Link + Worldwide + Lyrics + Telegram @Flixlit12</p>
+<input id="pinInput" type="password" placeholder="PIN 3003350273" class="w-full bg-black border border-white/10 rounded-full px-4 py-3 mb-3 text-sm text-center">
+<button onclick="checkPin()" class="w-full bg-[#1DB954] py-3 rounded-full font-bold text-sm text-black">Unlock v11 Musik</button>
+<p id="pinError" class="text-xs text-red-400 mt-2 hidden">Wrong PIN</p>
+</div>
+</div>
+
+<div class="bg-[#12131f] border-b border-white/10 p-4 flex justify-between items-center sticky top-0 z-40">
+<div class="flex items-center gap-2"><img src="data:image/png;base64,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" class="w-7 h-7 rounded"><b style="color:#1DB954">FLIXMUSIK</b> <span class="text-white/60 text-sm">v11 ULTIMATE - 100% Works</span> <span id="blobStatus" class="text-[10px] ml-2 px-2 py-0.5 rounded-full bg-green-500/20">JSONBlob</span></div>
+<div class="flex gap-2"><button onclick="window.open('flixmusik.html','_blank')" class="bg-white/10 px-3 py-2 rounded-full text-xs">View Main</button><button onclick="loadSongs()" class="bg-green-600 px-3 py-2 rounded-full text-xs font-bold">🔄 Refresh</button></div>
+</div>
+
+<div class="max-w-7xl mx-auto p-4">
+<div class="bg-green-500/10 border border-green-500/20 p-4 rounded-xl mb-4">
+<p class="font-bold text-sm">✅ v11 ULTIMATE MUSIK - Same as Flixlit v11!</p>
+<p class="text-xs mt-1">Cover = Base64 (instant, no internet needed). Audio = Paste link from Catbox.moe/Streamtape/Telegram (100% works worldwide). Lyrics added! Telegram Bot @Flixlit12 auto-send!</p>
+<p class="text-[11px] mt-2 bg-black/50 p-2 rounded">How to get audio link: 1. Go to Catbox.moe 2. Upload MP3 (free, no limit) 3. Copy link 4. Paste below. OR Telegram: Upload to Saved Messages, forward to @getpubliclink_bot</p>
+</div>
+
+<div class="flex gap-2 mb-6 bg-[#151821] p-1 rounded-full w-fit flex-wrap">
+<button id="tab1" onclick="switchTab(1)" class="px-5 py-2 rounded-full text-xs font-bold bg-white text-black">🎵 Songs</button>
+<button id="tab2" onclick="switchTab(2)" class="px-5 py-2 rounded-full text-xs font-bold text-white/60">💰 Prices</button>
+<button id="tab3" onclick="switchTab(3)" class="px-5 py-2 rounded-full text-xs font-bold text-white/60">🔑 Codes</button>
+<button id="tab4" onclick="switchTab(4)" class="px-5 py-2 rounded-full text-xs font-bold text-white/60">🤖 Bot</button>
+</div>
+
+<div id="panel1" class="grid lg:grid-cols-3 gap-6">
+<div class="lg:col-span-1 bg-[#151821] rounded-2xl p-5 border border-white/10 h-fit">
+<h2 class="font-bold mb-4">Upload Music - 100% Works</h2>
+<div class="flex gap-2 mb-3 bg-black p-1 rounded-full">
+<button id="typeSingleBtn" onclick="setType('single')" class="flex-1 py-2 rounded-full text-xs font-bold bg-white text-black">🎵 Single</button>
+<button id="typeAlbumBtn" onclick="setType('album')" class="flex-1 py-2 rounded-full text-xs font-bold text-white/60">💿 Album</button>
+</div>
+<input id="title" placeholder="Song / Album Title * e.g. Last Last" class="w-full bg-black border border-white/10 rounded-full px-4 py-3 mb-2 text-sm">
+<input id="artist" placeholder="Artist Name * e.g. Burna Boy" class="w-full bg-black border border-white/10 rounded-full px-4 py-3 mb-2 text-sm">
+<div class="flex gap-2 mb-2">
+<input id="year" placeholder="Year" class="w-1/2 bg-black border border-white/10 rounded-full px-4 py-3 text-sm">
+<select id="genre" class="w-1/2 bg-black border border-white/10 rounded-full px-4 py-3 text-sm"><option>Afrobeat</option><option>Amapiano</option><option>Hip-Hop</option><option>Gospel</option><option>Highlife</option><option>R&amp;B</option><option>Drill</option><option>Fuji</option></select>
+</div>
+
+<div class="bg-black/40 p-3 rounded-xl border border-white/5 mb-3">
+<p class="text-[10px] text-green-400 mb-2">🎨 COVER ART * - 100% Works! (Base64)</p>
+<input id="coverFile" type="file" accept="image/*" class="w-full text-xs mb-2">
+<div id="coverPreview" class="hidden mt-2">
+<img id="coverImg" class="w-full h-48 object-cover rounded-lg border-2 border-green-500">
+<p id="coverStatus" class="text-[11px] text-green-400 mt-2 bg-green-500/20 p-2 rounded">✅ Cover loaded! Ready!</p>
+</div>
+</div>
+
+<div id="singleBox">
+<div class="bg-black/40 p-3 rounded-xl border border-white/5 mb-3">
+<p class="text-[10px] text-green-400 mb-2">🎵 AUDIO LINK * - Paste link (100% works worldwide)</p>
+<input id="audioLink" placeholder="https://catbox.moe/... or Streamtape link" class="w-full bg-[#0f121e] border border-green-500/30 rounded-full px-3 py-3 text-xs">
+<p class="text-[9px] text-white/40 mt-2">Get link: Catbox.moe (MP3) / Dropbox / Telegram @getpubliclink_bot</p>
+<p id="audioStatus" class="text-[10px] mt-2 hidden p-2 rounded"></p>
+</div>
+<div class="bg-black/40 p-3 rounded-xl border border-white/5 mb-3">
+<p class="text-[10px] text-white/50 mb-2">📝 LYRICS (Shows with mic button)</p>
+<textarea id="lyrics" placeholder="Type lyrics here... Verse 1: ... Chorus: ..." class="w-full bg-[#0f121e] border border-white/10 rounded-xl px-3 py-2 text-xs h-24"></textarea>
+</div>
+</div>
+
+<div id="albumBox" class="hidden">
+<div class="bg-black/40 p-3 rounded-xl border border-white/5 mb-3">
+<p class="text-[10px] text-white/50 mb-2">💿 ADD TRACKS - Paste Link Each + Lyrics</p>
+<div class="space-y-2 mb-2">
+<input id="trackTitle" placeholder="Track name" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-3 py-2 text-xs">
+<input id="trackLink" placeholder="Track audio link https://..." class="w-full bg-[#0f121e] border border-white/10 rounded-full px-3 py-2 text-xs">
+<textarea id="trackLyrics" placeholder="Track lyrics (optional)" class="w-full bg-[#0f121e] border border-white/10 rounded-xl px-3 py-2 text-xs h-16"></textarea>
+</div>
+<button onclick="addTrack()" class="w-full bg-white/10 py-2 rounded-full text-xs font-bold">+ Add Track</button>
+<div id="trackListPreview" class="mt-3 space-y-1 max-h-40 overflow-auto"></div>
+</div>
+</div>
+
+<button id="publishBtn" onclick="uploadSong()" class="w-full bg-[#1DB954] py-3 rounded-full font-bold mt-2 text-black">🚀 Publish - 100% Works</button>
+<div id="uploadProgress" class="hidden mt-3 bg-black p-3 rounded-xl text-xs"><p id="progressLabel">Publishing...</p></div>
+</div>
+
+<div class="lg:col-span-2">
+<div class="bg-[#151821] rounded-2xl p-5 border border-white/10">
+<div class="flex justify-between items-center mb-4"><h2 class="font-bold">Live Music - Worldwide</h2><span id="count" class="text-xs bg-white/10 px-2 py-1 rounded-full">0</span></div>
+<div id="songList" class="space-y-3 max-h-[800px] overflow-auto"></div>
+</div>
+</div>
+</div>
+
+<div id="panel2" class="hidden max-w-2xl">
+<div class="bg-[#151821] rounded-2xl p-6 border border-white/10">
+<h2 class="font-bold text-lg mb-1">💰 Edit Prices &amp; Bank</h2>
+<div class="space-y-4 mt-4">
+<div class="bg-black/40 p-4 rounded-xl border border-white/5">
+<p class="text-[10px] text-white/50 mb-2">KUDA BANK &amp; CONTACTS</p>
+<input id="kudaName" placeholder="Account Name" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 mb-2 text-sm">
+<input id="kudaNumber" placeholder="Kuda Number 3003350273" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 mb-2 text-sm">
+<input id="whatsapp" placeholder="WhatsApp 07063226816" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 mb-2 text-sm">
+<input id="telegram" placeholder="Telegram @Flixlit12" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm">
+</div>
+<div class="bg-black/40 p-4 rounded-xl border border-white/5">
+<div class="grid grid-cols-3 gap-2">
+<div><label class="text-[10px] text-white/60">Daily ₦</label><input id="priceDaily" type="number" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm"></div>
+<div><label class="text-[10px] text-white/60">Weekly ₦</label><input id="priceWeekly" type="number" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm"></div>
+<div><label class="text-[10px] text-white/60">Monthly ₦</label><input id="priceMonthly" type="number" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm"></div>
+</div>
+</div>
+<button onclick="savePrices()" class="w-full bg-[#1DB954] py-3 rounded-full font-bold text-black">Save Prices</button>
+<div id="pricePreview" class="text-xs text-white/50 mt-3 bg-black/40 p-3 rounded-xl"></div>
+</div>
+</div>
+</div>
+
+<div id="panel3" class="hidden max-w-2xl">
+<div class="bg-[#151821] rounded-2xl p-6 border border-white/10">
+<h2 class="font-bold text-lg mb-1">🔑 Generate Activation Codes</h2>
+<div class="space-y-3 mt-4">
+<input id="custName" placeholder="Customer Name" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm">
+<input id="custPhone" placeholder="WhatsApp Number" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm">
+<select id="codePlan" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm"><option value="1">Daily - 1 Day</option><option value="7" selected="">Weekly - 7 Days</option><option value="30">Monthly - 30 Days</option></select>
+<div class="flex gap-2"><input id="customCode" placeholder="Custom code (optional)" class="flex-1 bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm"><button onclick="genRandomCode()" class="bg-white/10 px-4 py-2 rounded-full text-xs">Random</button></div>
+<button onclick="generateCode()" class="w-full bg-[#1DB954] py-3 rounded-full font-bold text-black">Generate Code</button>
+<div id="newCodeResult" class="hidden bg-black/40 p-4 rounded-xl mt-3"></div>
+<input id="codeSearch" placeholder="Search codes..." oninput="renderCodes()" class="w-full bg-black border border-white/10 rounded-full px-4 py-3 text-sm mt-4">
+<div id="codeList" class="space-y-2 mt-3 max-h-[400px] overflow-auto"></div>
+<div class="flex justify-between items-center mt-4"><span id="codeCount" class="text-xs text-white/50">0 codes</span><button onclick="exportCodes()" class="text-xs bg-white/10 px-3 py-1 rounded-full">Export</button></div>
+</div>
+</div>
+</div>
+
+<div id="panel4" class="hidden max-w-2xl">
+<div class="bg-[#151821] rounded-2xl p-6 border border-white/10">
+<h2 class="font-bold text-lg mb-1">🤖 Telegram Bot - @Flixlit12</h2>
+<p class="text-xs text-white/50 mb-4">Auto send new songs to your channel https://t.me/Flixlit12 - Chat ID -1003916633950</p>
+<div class="space-y-3">
+<div class="bg-black/40 p-4 rounded-xl border border-white/5">
+<label class="text-[10px] text-white/50">BOT TOKEN (from @BotFather)</label>
+<input id="botToken" placeholder="8900722927:AA..." class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm mt-1">
+</div>
+<div class="bg-black/40 p-4 rounded-xl border border-white/5">
+<label class="text-[10px] text-white/50">CHAT ID (Your Channel ID)</label>
+<input id="chatId" value="-1003916633950" class="w-full bg-[#0f121e] border border-white/10 rounded-full px-4 py-3 text-sm mt-1">
+<p class="text-[9px] text-white/30 mt-1">Your channel @Flixlit12 = -1003916633950 (pre-filled)</p>
+</div>
+<div class="flex gap-2">
+<button onclick="testBot()" class="flex-1 bg-[#229ED9] py-3 rounded-full font-bold text-sm">Test Bot - Send to @Flixlit12</button>
+<button onclick="saveBot()" class="flex-1 bg-[#1DB954] py-3 rounded-full font-bold text-black text-sm">Save Bot</button>
+</div>
+<div id="botStatus" class="text-xs bg-black/40 p-3 rounded-xl mt-3 hidden"></div>
+<div class="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl mt-4 text-xs">
+<b>Setup:</b><br>
+1. Token: 8900722927:AAF... (your bot)<br>
+2. Add bot as admin to https://t.me/Flixlit12<br>
+3. Chat ID -1003916633950 = @Flixlit12<br>
+4. Test → Check channel<br>
+5. Auto sends on new song!
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-white text-black px-6 py-3 rounded-full font-bold text-sm z-50 max-w-[90%]"></div>
+
+<script>
+let pin="3003350273";
+function checkPin(){let v=document.getElementById('pinInput').value; if(v===pin||v==="07063226816"){document.getElementById('pinLock').classList.add('hidden'); init(); loadSongs(); loadPrices(); renderCodes(); loadBot();} else document.getElementById('pinError').classList.remove('hidden');}
+
+let coverBase64="", allSongs=[], tracks=[];
+let currentType='single';
+const BLOB_ID="1384152150843904001";
+let blobId=localStorage.getItem('flixmusik_blobId') || BLOB_ID;
+
+function init(){
+ blobId=localStorage.getItem('flixmusik_blobId') || BLOB_ID;
+ localStorage.setItem('flixmusik_blobId', blobId);
+ document.getElementById('blobStatus').innerText = blobId.substring(0,8)+'...';
+}
+function switchTab(n){
+ document.getElementById('panel1').classList.toggle('hidden', n!==1);
+ document.getElementById('panel2').classList.toggle('hidden', n!==2);
+ document.getElementById('panel3').classList.toggle('hidden', n!==3);
+ document.getElementById('panel4').classList.toggle('hidden', n!==4);
+ document.getElementById('tab1').className = n===1?'px-5 py-2 rounded-full text-xs font-bold bg-white text-black':'px-5 py-2 rounded-full text-xs font-bold text-white/60';
+ document.getElementById('tab2').className = n===2?'px-5 py-2 rounded-full text-xs font-bold bg-white text-black':'px-5 py-2 rounded-full text-xs font-bold text-white/60';
+ document.getElementById('tab3').className = n===3?'px-5 py-2 rounded-full text-xs font-bold bg-white text-black':'px-5 py-2 rounded-full text-xs font-bold text-white/60';
+ document.getElementById('tab4').className = n===4?'px-5 py-2 rounded-full text-xs font-bold bg-white text-black':'px-5 py-2 rounded-full text-xs font-bold text-white/60';
+}
+function setType(t){
+ currentType=t;
+ document.getElementById('typeSingleBtn').className=t==='single'?'flex-1 py-2 rounded-full text-xs font-bold bg-white text-black':'flex-1 py-2 rounded-full text-xs font-bold text-white/60';
+ document.getElementById('typeAlbumBtn').className=t==='album'?'flex-1 py-2 rounded-full text-xs font-bold bg-white text-black':'flex-1 py-2 rounded-full text-xs font-bold text-white/60';
+ document.getElementById('singleBox').classList.toggle('hidden',t==='album');
+ document.getElementById('albumBox').classList.toggle('hidden',t!=='album');
+}
+
+document.getElementById('coverFile').addEventListener('change', e=>{
+ let file=e.target.files[0]; if(!file) return;
+ if(file.size > 500*1024){toast('⚠️ Cover too big! '+(file.size/1024).toFixed(0)+'KB. Use tinypng.com');}
+ let reader=new FileReader();
+ reader.onload=ev=>{
+  coverBase64=ev.target.result;
+  document.getElementById('coverImg').src=coverBase64;
+  document.getElementById('coverPreview').classList.remove('hidden');
+  document.getElementById('coverStatus').innerText='✅ Cover loaded! Size: '+(coverBase64.length/1024).toFixed(0)+'KB - Ready! (100% works)';
+  toast('✅ Cover loaded! 100% works!');
+ };
+ reader.readAsDataURL(file);
+});
+
+document.getElementById('audioLink').addEventListener('input', e=>{
+ let v=e.target.value.trim();
+ let status=document.getElementById('audioStatus');
+ if(v){
+  status.classList.remove('hidden');
+  if(v.startsWith('https://')){
+   status.innerText='✅ Link looks good! Ready to publish!';
+   status.className='text-[10px] mt-2 p-2 rounded bg-green-500/20 text-green-300';
+  } else {
+   status.innerText='❌ Must start with https://';
+   status.className='text-[10px] mt-2 p-2 rounded bg-red-500/20 text-red-300';
+  }
+ } else {status.classList.add('hidden');}
+});
+
+function addTrack(){
+ let title=document.getElementById('trackTitle').value.trim()||`Track ${tracks.length+1}`;
+ let link=document.getElementById('trackLink').value.trim();
+ let lyrics=document.getElementById('trackLyrics').value.trim();
+ if(!link){toast('Paste track audio link');return;}
+ tracks.push({title:title, audio:link, lyrics:lyrics});
+ document.getElementById('trackTitle').value='';document.getElementById('trackLink').value='';document.getElementById('trackLyrics').value='';
+ renderTracks();
+}
+function renderTracks(){
+ document.getElementById('trackListPreview').innerHTML=tracks.map((t,i)=>`<div class="flex justify-between bg-white/5 p-2 rounded text-[11px]"><span>${t.title} ${t.lyrics?'• Lyrics':''}</span><button onclick="tracks.splice(${i},1);renderTracks()" class="text-red-400">x</button></div>`).join('');
+}
+
+async function loadSongs(){
+ try{
+  let res=await fetch(`https://jsonblob.com/api/jsonBlob/${blobId}`);
+  let data=res.ok?await res.json():[];
+  allSongs=Array.isArray(data)?data:JSON.parse(localStorage.getItem('flixmusik_backup')||'[]');
+ }catch(e){
+  allSongs=JSON.parse(localStorage.getItem('flixmusik_backup')||'[]');
+ }
+ renderList();
+}
+function renderList(){
+ document.getElementById('count').innerText=allSongs.length;
+ document.getElementById('songList').innerHTML=allSongs.map((m,i)=>`<div class="bg-black/40 p-3 rounded-xl flex gap-3"><img src="${m.cover}" class="w-16 h-16 rounded-lg object-cover bg-zinc-800"><div class="flex-1 min-w-0"><p class="font-bold text-sm truncate">${m.title} ${m.type==='album'?'<span class="text-[9px] bg-blue-500/30 px-2 py-0.5 rounded-full">ALBUM • '+(m.tracks?.length||0)+'</span>':''}</p><p class="text-xs text-white/50">${m.artist} • ${m.year} • ${m.genre} ${m.lyrics||(m.tracks&&m.tracks[0]?.lyrics)?'• Lyrics':''}</p><p class="text-[10px] text-green-400 truncate">${m.audio?.substring(0,40)||'Album'}</p></div><button onclick="deleteSong(${i})" class="bg-red-500/20 px-3 py-1 rounded-full text-[10px]">Del</button></div>`).join('')||'<p class="text-white/30 text-center p-8">No music yet - Upload first one, cover will work 100%!</p>';
+}
+async function deleteSong(idx){ if(!confirm('Delete?')) return; allSongs.splice(idx,1); await save(); renderList(); toast('Deleted'); }
+async function save(){
+ localStorage.setItem('flixmusik_backup', JSON.stringify(allSongs));
+ try{
+  await fetch(`https://jsonblob.com/api/jsonBlob/${blobId}`,{method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(allSongs)});
+ }catch(e){console.log('offline save', e);}
+}
+async function sendToTelegram(song){
+ try{
+  let botToken=document.getElementById('botToken').value.trim() || localStorage.getItem('flixmusik_botToken') || "";
+  let chatId=document.getElementById('chatId').value.trim() || "-1003916633950";
+  if(!botToken) return;
+  let text=`🎵 New Music on FLIXMUSIK v11!\n\n🎤 ${song.title} - ${song.artist}\n💿 ${song.genre} • ${song.year}\n${song.lyrics?'📝 With Lyrics!':''}\n\n🔗 Listen: https://sonivalopez-hue.github.io/Flixlit/ \n📢 Join: https://t.me/Flixlit12`;
+  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chat_id:chatId, text:text})});
+ }catch(e){console.log('telegram error',e);}
+}
+async function uploadSong(){
+ let title=document.getElementById('title').value.trim();
+ let artist=document.getElementById('artist').value.trim();
+ let year=document.getElementById('year').value.trim()||'2024';
+ let genre=document.getElementById('genre').value;
+ let audioLink=document.getElementById('audioLink').value.trim();
+ let lyrics=document.getElementById('lyrics').value.trim();
+ let coverUrl=coverBase64;
+
+ if(!title||!artist){toast('❌ Enter title and artist'); return;}
+ if(!coverUrl){toast('❌ Upload cover first!'); return;}
+ if(currentType==='single' && !audioLink){toast('❌ Paste audio link!'); return;}
+ if(currentType==='single' && !audioLink.startsWith('https://')){toast('❌ Link must start with https://'); return;}
+ if(currentType==='album' && tracks.length===0){toast('❌ Add at least 1 track'); return;}
+
+ document.getElementById('publishBtn').disabled=true;
+ document.getElementById('publishBtn').innerText='Publishing... 100% Works...';
+ document.getElementById('uploadProgress').classList.remove('hidden');
+ document.getElementById('progressLabel').innerText='Saving... Cover is base64 (no upload needed) - This will work 100%!';
+
+ try{
+  try{
+   let res=await fetch(`https://jsonblob.com/api/jsonBlob/${blobId}`);
+   if(res.ok){
+    let current=await res.json();
+    if(Array.isArray(current) && current.length>allSongs.length) allSongs=current;
+   }
+  }catch(e){}
+
+  let newSong;
+  if(currentType==='single'){
+   newSong={id:Date.now(), title, artist, year, genre, type:'single', cover:coverUrl, audio:audioLink, lyrics:lyrics, color:'from-green-700 to-emerald-900', createdAt:new Date().toISOString()};
+  } else {
+   newSong={id:Date.now(), title, artist, year, genre, type:'album', cover:coverUrl, tracks:tracks, color:'from-green-700 to-emerald-900', createdAt:new Date().toISOString()};
+  }
+  allSongs.unshift(newSong);
+  await save();
+  await sendToTelegram(newSong);
+
+  document.getElementById('title').value='';document.getElementById('artist').value='';document.getElementById('audioLink').value='';document.getElementById('lyrics').value='';document.getElementById('coverFile').value='';coverBase64='';document.getElementById('coverPreview').classList.add('hidden');tracks=[];renderTracks();
+
+  toast('✅✅✅ Published! 100% Works! Now shows worldwide!');
+  renderList();
+ }catch(e){
+  toast('Error: '+e);
+ }
+ document.getElementById('publishBtn').disabled=false;
+ document.getElementById('publishBtn').innerText='🚀 Publish - 100% Works';
+ document.getElementById('uploadProgress').classList.add('hidden');
+}
+
+function loadPrices(){let s=JSON.parse(localStorage.getItem('flixmusik_settings')||'null')||{kudaName:'FLIXMUSIK',kudaNumber:'3003350273',whatsapp:'07063226816',telegram:'@Flixlit12',daily:500,weekly:2000,monthly:5000};document.getElementById('kudaName').value=s.kudaName;document.getElementById('kudaNumber').value=s.kudaNumber;document.getElementById('whatsapp').value=s.whatsapp;document.getElementById('telegram').value=s.telegram;document.getElementById('priceDaily').value=s.daily;document.getElementById('priceWeekly').value=s.weekly;document.getElementById('priceMonthly').value=s.monthly;document.getElementById('pricePreview').innerHTML=`Preview: Daily ₦${s.daily} | Weekly ₦${s.weekly} | Monthly ₦${s.monthly}<br>Kuda ${s.kudaNumber} • Telegram ${s.telegram}`;}
+function savePrices(){let s={kudaName:document.getElementById('kudaName').value||'FLIXMUSIK',kudaNumber:document.getElementById('kudaNumber').value||'3003350273',whatsapp:document.getElementById('whatsapp').value||'07063226816',telegram:document.getElementById('telegram').value||'@Flixlit12',daily:document.getElementById('priceDaily').value||500,weekly:document.getElementById('priceWeekly').value||2000,monthly:document.getElementById('priceMonthly').value||5000};localStorage.setItem('flixmusik_settings',JSON.stringify(s));document.getElementById('pricePreview').innerHTML=`✅ Saved! Daily ₦${s.daily} | Weekly ₦${s.weekly} | Monthly ₦${s.monthly}`;toast('Prices saved!');}
+
+let codes=JSON.parse(localStorage.getItem('flixmusik_codes')||'[]');
+function genRandomCode(){let c='MUSIK-'+Math.random().toString(36).substring(2,6).toUpperCase()+'-'+Math.floor(1000+Math.random()*9000);document.getElementById('customCode').value=c;}
+function generateCode(){let name=document.getElementById('custName').value.trim()||'Customer';let phone=document.getElementById('custPhone').value.trim()||'';let days=parseInt(document.getElementById('codePlan').value);let custom=document.getElementById('customCode').value.trim().toUpperCase();let code=custom||('MUSIK-'+Math.random().toString(36).substring(2,6).toUpperCase()+'-'+Math.floor(1000+Math.random()*9000));let entry={code:code,customer:name,phone:phone,days:days,created:new Date().toISOString(),expires:new Date(Date.now()+days*86400000).toISOString()};codes.unshift(entry);localStorage.setItem('flixmusik_codes',JSON.stringify(codes));let res=document.getElementById('newCodeResult');res.classList.remove('hidden');res.innerHTML=`<p class="font-bold text-sm">✅ Code Generated!</p><p class="font-mono text-lg mt-2 bg-black p-2 rounded">${code}</p><p class="text-xs mt-2">${name} - ${days} days</p><div class="flex gap-2 mt-3"><button onclick="copyText('${code}')" class="bg-white text-black px-4 py-2 rounded-full text-xs font-bold">Copy</button><a href="https://wa.me/${phone.replace(/[^0-9]/g,'')}?text=Hi%20${encodeURIComponent(name)}%2C%20your%20FLIXMUSIK%20code%20is%3A%20${code}" target="_blank" class="bg-green-600 px-4 py-2 rounded-full text-xs font-bold">WhatsApp</a></div>`;document.getElementById('custName').value='';document.getElementById('custPhone').value='';document.getElementById('customCode').value='';renderCodes();toast('Code: '+code);}
+function renderCodes(){let q=(document.getElementById('codeSearch')?.value||'').toLowerCase();let filtered=codes.filter(c=>!q||c.code.toLowerCase().includes(q)||c.customer.toLowerCase().includes(q));document.getElementById('codeCount').innerText=filtered.length+' codes';document.getElementById('codeList').innerHTML=filtered.map((c,i)=>`<div class="bg-black/40 p-3 rounded-xl"><div class="flex justify-between"><div><p class="font-mono font-bold text-sm">${c.code}</p><p class="text-xs">${c.customer} ${c.phone?'• '+c.phone:''}</p></div><span class="text-[9px] px-2 py-1 rounded-full ${new Date(c.expires)>new Date()?'bg-green-500/20 text-green-300':'bg-red-500/20 text-red-300'}">${new Date(c.expires)>new Date()?'ACTIVE':'EXPIRED'}</span></div><div class="flex gap-1 mt-2"><button onclick="copyText('${c.code}')" class="bg-white/10 px-3 py-1 rounded-full text-[10px]">Copy</button><button onclick="codes.splice(${codes.indexOf(c)},1);localStorage.setItem('flixmusik_codes',JSON.stringify(codes));renderCodes()" class="bg-red-500/10 px-3 py-1 rounded-full text-[10px]">Del</button></div></div>`).join('')||'<p class="text-white/30 text-xs">No codes</p>';}
+function copyText(t){navigator.clipboard.writeText(t);toast('Copied: '+t);}
+function exportCodes(){let blob=new Blob([JSON.stringify(codes,null,2)],{type:'application/json'});let url=URL.createObjectURL(blob);let a=document.createElement('a');a.href=url;a.download='flixmusik_codes.json';a.click();}
+
+function loadBot(){
+ let token=localStorage.getItem('flixmusik_botToken')||"";
+ let chatId=localStorage.getItem('flixmusik_chatId')||"-1003916633950";
+ document.getElementById('botToken').value=token;
+ document.getElementById('chatId').value=chatId;
+}
+function saveBot(){
+ localStorage.setItem('flixmusik_botToken', document.getElementById('botToken').value.trim());
+ localStorage.setItem('flixmusik_chatId', document.getElementById('chatId').value.trim());
+ toast('Bot saved!');
+ document.getElementById('botStatus').classList.remove('hidden');
+ document.getElementById('botStatus').innerText='✅ Bot saved! Chat ID -1003916633950 = @Flixlit12';
+}
+async function testBot(){
+ let token=document.getElementById('botToken').value.trim();
+ let chatId=document.getElementById('chatId').value.trim()||"-1003916633950";
+ if(!token){toast('Enter bot token'); return;}
+ document.getElementById('botStatus').classList.remove('hidden');
+ document.getElementById('botStatus').innerText='Sending test to @Flixlit12...';
+ try{
+  let res=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chat_id:chatId, text:`🎵 FLIXMUSIK v11 Test - Bot Works!\n✅ Your bot is connected to @Flixlit12\n🔗 Channel: https://t.me/Flixlit12`})});
+  let data=await res.json();
+  if(data.ok){document.getElementById('botStatus').innerText='✅ Test sent! Check @Flixlit12 channel!'; toast('✅ Sent to @Flixlit12!');} else {document.getElementById('botStatus').innerText='❌ Error: '+JSON.stringify(data);}
+ }catch(e){document.getElementById('botStatus').innerText='❌ Error: '+e;}
+}
+
+function toast(m){let t=document.getElementById('toast');t.innerText=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),4000);}
+</script>
+
+
+</body></html>
